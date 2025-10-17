@@ -91,6 +91,7 @@ api_provider = st.sidebar.radio(
 env_api_key = os.getenv("MAP_API_KEY", "")
 
 if api_provider == "Google Maps":
+    env_api_key = get_api_key()
     if env_api_key:
         st.sidebar.success("✅ Google Maps API key loaded from .env file")
         api_key = env_api_key
