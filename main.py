@@ -9,6 +9,17 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+
+# Function to get API key from dotenv or Streamlit secrets
+def get_api_key():
+    try:
+        # Try Streamlit secrets first (production)
+        return st.secrets.get("MAP_API_KEY", "")
+    except FileNotFoundError:
+        # Fall back to dotenv (development)
+        return os.getenv("MAP_API_KEY", "")
+
+
 # Page config
 st.set_page_config(
     page_title="🗺️ Geocoding Dashboard",
@@ -76,14 +87,24 @@ api_provider = st.sidebar.radio(
     help="Choose your geocoding service provider"
 )
 
-api_key = st.sidebar.text_input(
-    "🔑 Enter your API Key",
-    type="password",
-    help="Your API key for reverse geocoding" if api_provider == "Google Maps" else "Leave empty for OpenStreetMap (free, no key needed)"
-)
+# Check for API key in environment
+env_api_key = os.getenv("MAP_API_KEY", "")
 
-if api_provider == "Google Maps" and not api_key:
-    st.sidebar.warning("⚠️ Google Maps requires an API key")
+if api_provider == "Google Maps":
+    if env_api_key:
+        st.sidebar.success("✅ Google Maps API key loaded from .env file")
+        api_key = env_api_key
+    else:
+        api_key = st.sidebar.text_input(
+            "🔑 Enter your Google Maps API Key",
+            type="password",
+            help="Your Google Maps API key for reverse geocoding"
+        )
+        if not api_key:
+            st.sidebar.warning("⚠️ No API key found. Please provide one or add MAP_API_KEY to .env file")
+else:
+    api_key = None
+    st.sidebar.info("ℹ️ OpenStreetMap is free and doesn't require an API key")
 
 # File upload
 st.sidebar.header("📤 Upload File")
