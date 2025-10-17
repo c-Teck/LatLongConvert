@@ -5,12 +5,13 @@ import time
 import os
 from io import BytesIO
 from dotenv import load_dotenv
+import json
 
 # Load environment variables
 load_dotenv()
 
 
-# Function to get API key from dotenv or Streamlit secrets
+# Function to get API key from secrets or dotenv
 def get_api_key():
     try:
         # Try Streamlit secrets first (production)
@@ -37,9 +38,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
     }
-    .progress-container {
-        margin: 1rem 0;
-    }
     .success-box {
         background-color: #d4edda;
         border: 1px solid #c3e6cb;
@@ -64,45 +62,57 @@ st.markdown("""
         border-radius: 0.5rem;
         margin: 1rem 0;
     }
+    .log-box {
+        background-color: #f5f5f5;
+        border: 1px solid #ddd;
+        color: #333;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        font-family: monospace;
+        font-size: 0.85rem;
+        max-height: 400px;
+        overflow-y: auto;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("🗺️ Geocoding & Address Extraction Dashboard")
-st.markdown("Convert latitude/longitude coordinates to detailed addresses with state, city, town, and postal codes")
+st.markdown(
+    "Convert latitude/longitude coordinates to detailed addresses using LocationIQ, Google Maps, or OpenStreetMap")
 
 # Initialize session state
 if "df" not in st.session_state:
     st.session_state.df = None
 if "processed_df" not in st.session_state:
     st.session_state.processed_df = None
-if "sheet_info" not in st.session_state:
-    st.session_state.sheet_info = None
+if "logs" not in st.session_state:
+    st.session_state.logs = []
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Configuration")
 
 api_provider = st.sidebar.radio(
     "🗺️ Select Geocoding Provider",
-    options=["Google Maps", "OpenStreetMap (Nominatim)"],
+    options=["LocationIQ", "Google Maps", "OpenStreetMap (Nominatim)"],
     help="Choose your geocoding service provider"
 )
 
-# Check for API key in environment
-env_api_key = os.getenv("MAP_API_KEY", "")
+# Get API key from secrets or dotenv
+env_api_key = get_api_key()
 
-if api_provider == "Google Maps":
-    env_api_key = get_api_key()
+if api_provider in ["LocationIQ", "Google Maps"]:
     if env_api_key:
-        st.sidebar.success("✅ Google Maps API key loaded from .env file")
+        st.sidebar.success(f"✅ {api_provider} API key loaded from environment")
         api_key = env_api_key
     else:
         api_key = st.sidebar.text_input(
-            "🔑 Enter your Google Maps API Key",
+            f"🔑 Enter your {api_provider} API Key",
             type="password",
-            help="Your Google Maps API key for reverse geocoding"
+            help=f"Your {api_provider} API key for reverse geocoding"
         )
         if not api_key:
-            st.sidebar.warning("⚠️ No API key found. Please provide one or add MAP_API_KEY to .env file")
+            st.sidebar.warning(f"⚠️ No API key found. Please provide one or add MAP_API_KEY to environment")
 else:
     api_key = None
     st.sidebar.info("ℹ️ OpenStreetMap is free and doesn't require an API key")
@@ -208,8 +218,8 @@ if uploaded_file is not None:
     st.markdown("### ⚡ Process Data")
 
     if st.button("🚀 Start Geocoding", type="primary", use_container_width=True):
-        if api_provider == "Google Maps" and not api_key:
-            st.error("❌ Please enter your Google Maps API key in the sidebar")
+        if api_provider in ["LocationIQ", "Google Maps"] and not api_key:
+            st.error(f"❌ Please enter your {api_provider} API key in the sidebar")
         else:
             # Validate coordinates
             valid_coords = df[[lat_col, lon_col]].notna().all(axis=1).sum()
@@ -219,64 +229,105 @@ if uploaded_file is not None:
             else:
                 st.success(f"✅ Found {valid_coords} valid coordinate pairs")
 
-                # Process coordinates
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                results_placeholder = st.empty()
+                # Clear logs
+                st.session_state.logs = []
 
+                # Create two columns for processing
+                log_col, progress_col = st.columns([1, 1])
+
+                with log_col:
+                    st.markdown("#### 📡 Real-time API Activity Log")
+                    log_placeholder = st.empty()
+
+                with progress_col:
+                    st.markdown("#### ⏳ Processing Progress")
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+
+                # Process coordinates
                 processed_data = {
                     'Latitude': [],
                     'Longitude': [],
-                    'Full Address': [],
-                    'State': [],
+                    'Street1': [],
+                    'Street2': [],
                     'City': [],
-                    'Town': [],
-                    'Postal Code': []
+                    'State': [],
+                    'Postal Code': [],
+                    'Country': [],
+                    'Full Address': []
                 }
 
 
-                def geocode_nominatim(lat, lon):
-                    """Reverse geocode using OpenStreetMap Nominatim"""
+                def log_message(msg):
+                    st.session_state.logs.append(msg)
+                    log_placeholder.markdown(f'<div class="log-box">{"<br>".join(st.session_state.logs[-20:])}</div>',
+                                             unsafe_allow_html=True)
+
+
+                def geocode_locationiq(lat, lon, api_key):
+                    """Reverse geocode using LocationIQ API"""
                     try:
-                        url = f'https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}'
-                        headers = {'User-Agent': 'GeoDashboard/1.0'}
-                        response = requests.get(url, timeout=10, headers=headers)
+                        log_message(f"📤 Sending request to LocationIQ: lat={lat}, lon={lon}")
+                        url = f'https://us1.locationiq.com/v1/reverse.php?key={api_key}&lat={lat}&lon={lon}&format=json'
+                        response = requests.get(url, timeout=10)
+                        log_message(f"📥 Response Status: {response.status_code}")
 
                         if response.status_code == 200:
                             data = response.json()
-                            address = data.get('display_name', 'Unknown')
-                            address_parts = data.get('address', {})
+                            log_message(f"✅ Data received successfully")
+
+                            address = data.get('address', {})
+                            house_number = address.get('house_number', '')
+                            road = address.get('road', '')
+                            quarter = address.get('quarter', '')
+                            suburb = address.get('suburb', '')
+                            city = address.get('city', '')
+                            state = address.get('state', '')
+                            postcode = address.get('postcode', '')
+                            country = address.get('country', '')
+                            display_name = data.get('display_name', '')
+
+                            street1 = f"{house_number} {road}".strip()
+                            street2 = f"{quarter} {suburb}".strip()
 
                             return {
-                                'address': address,
-                                'state': address_parts.get('state', ''),
-                                'city': address_parts.get('city', address_parts.get('county', '')),
-                                'town': address_parts.get('town', address_parts.get('village', '')),
-                                'postal': address_parts.get('postcode', '')
+                                'street1': street1,
+                                'street2': street2,
+                                'city': city,
+                                'state': state,
+                                'postal': postcode,
+                                'country': country,
+                                'address': display_name
                             }
-                    except:
-                        pass
+                        else:
+                            log_message(f"❌ Error: HTTP {response.status_code}")
+                    except requests.exceptions.Timeout:
+                        log_message(f"⏱️ Request timeout")
+                    except Exception as e:
+                        log_message(f"❌ Exception: {str(e)}")
                     return None
 
 
                 def geocode_google_maps(lat, lon, api_key):
                     """Reverse geocode using Google Maps API"""
                     try:
+                        log_message(f"📤 Sending request to Google Maps: lat={lat}, lon={lon}")
                         url = f'https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lon}&key={api_key}'
                         response = requests.get(url, timeout=10)
+                        log_message(f"📥 Response Status: {response.status_code}")
 
                         if response.status_code == 200:
                             data = response.json()
                             if data.get('results'):
+                                log_message(f"✅ Data received successfully")
                                 result = data['results'][0]
-                                address = result.get('formatted_address', 'Unknown')
+                                address = result.get('formatted_address', '')
                                 address_components = result.get('address_components', [])
 
-                                # Extract address components
                                 state = ''
                                 city = ''
-                                town = ''
                                 postal = ''
+                                country = ''
 
                                 for component in address_components:
                                     types = component.get('types', [])
@@ -286,22 +337,61 @@ if uploaded_file is not None:
                                         state = long_name
                                     elif 'locality' in types:
                                         city = long_name
-                                    elif 'administrative_area_level_2' in types and not city:
-                                        city = long_name
-                                    elif 'administrative_area_level_3' in types:
-                                        town = long_name
                                     elif 'postal_code' in types:
                                         postal = long_name
+                                    elif 'country' in types:
+                                        country = long_name
 
                                 return {
-                                    'address': address,
-                                    'state': state,
+                                    'street1': address.split(',')[0] if address else '',
+                                    'street2': '',
                                     'city': city,
-                                    'town': town,
-                                    'postal': postal
+                                    'state': state,
+                                    'postal': postal,
+                                    'country': country,
+                                    'address': address
                                 }
-                    except:
-                        pass
+                            else:
+                                log_message(f"⚠️ No results found")
+                        else:
+                            log_message(f"❌ Error: HTTP {response.status_code}")
+                    except requests.exceptions.Timeout:
+                        log_message(f"⏱️ Request timeout")
+                    except Exception as e:
+                        log_message(f"❌ Exception: {str(e)}")
+                    return None
+
+
+                def geocode_nominatim(lat, lon):
+                    """Reverse geocode using OpenStreetMap Nominatim"""
+                    try:
+                        log_message(f"📤 Sending request to Nominatim: lat={lat}, lon={lon}")
+                        url = f'https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}'
+                        headers = {'User-Agent': 'GeoDashboard/1.0'}
+                        response = requests.get(url, timeout=10, headers=headers)
+                        log_message(f"📥 Response Status: {response.status_code}")
+
+                        if response.status_code == 200:
+                            data = response.json()
+                            log_message(f"✅ Data received successfully")
+                            address = data.get('display_name', '')
+                            address_parts = data.get('address', {})
+
+                            return {
+                                'street1': address_parts.get('road', ''),
+                                'street2': address_parts.get('suburb', ''),
+                                'city': address_parts.get('city', address_parts.get('county', '')),
+                                'state': address_parts.get('state', ''),
+                                'postal': address_parts.get('postcode', ''),
+                                'country': address_parts.get('country', ''),
+                                'address': address
+                            }
+                        else:
+                            log_message(f"❌ Error: HTTP {response.status_code}")
+                    except requests.exceptions.Timeout:
+                        log_message(f"⏱️ Request timeout")
+                    except Exception as e:
+                        log_message(f"❌ Exception: {str(e)}")
                     return None
 
 
@@ -309,8 +399,12 @@ if uploaded_file is not None:
                     lat = row[lat_col]
                     lon = row[lon_col]
 
+                    log_message(f"🔄 Row {idx + 1}/{valid_coords}: Processing coordinates")
+
                     if pd.notnull(lat) and pd.notnull(lon):
-                        if api_provider == "Google Maps":
+                        if api_provider == "LocationIQ":
+                            result = geocode_locationiq(lat, lon, api_key)
+                        elif api_provider == "Google Maps":
                             result = geocode_google_maps(lat, lon, api_key)
                         else:
                             result = geocode_nominatim(lat, lon)
@@ -318,22 +412,33 @@ if uploaded_file is not None:
                         if result:
                             processed_data['Latitude'].append(lat)
                             processed_data['Longitude'].append(lon)
-                            processed_data['Full Address'].append(result['address'])
-                            processed_data['State'].append(result['state'])
+                            processed_data['Street1'].append(result['street1'])
+                            processed_data['Street2'].append(result['street2'])
                             processed_data['City'].append(result['city'])
-                            processed_data['Town'].append(result['town'])
+                            processed_data['State'].append(result['state'])
                             processed_data['Postal Code'].append(result['postal'])
+                            processed_data['Country'].append(result['country'])
+                            processed_data['Full Address'].append(result['address'])
+                            log_message(f"✅ Row {idx + 1} processed successfully")
                         else:
                             processed_data['Latitude'].append(lat)
                             processed_data['Longitude'].append(lon)
+                            processed_data['Street1'].append('Error')
+                            processed_data['Street2'].append('Error')
+                            processed_data['City'].append('Error')
+                            processed_data['State'].append('Error')
+                            processed_data['Postal Code'].append('Error')
+                            processed_data['Country'].append('Error')
                             processed_data['Full Address'].append('Error')
-                            processed_data['State'].append('N/A')
-                            processed_data['City'].append('N/A')
-                            processed_data['Town'].append('N/A')
-                            processed_data['Postal Code'].append('N/A')
+                            log_message(f"❌ Row {idx + 1} failed to process")
 
-                        # Rate limiting (Google Maps allows 50 requests/sec, Nominatim ~1/sec)
-                        time.sleep(0.5 if api_provider == "Google Maps" else 1)
+                        # Rate limiting
+                        if api_provider == "LocationIQ":
+                            time.sleep(0.8)
+                        elif api_provider == "Google Maps":
+                            time.sleep(0.5)
+                        else:
+                            time.sleep(1)
 
                     # Update progress
                     progress = (idx + 1) / valid_coords
@@ -346,6 +451,7 @@ if uploaded_file is not None:
 
                 progress_bar.empty()
                 status_text.empty()
+                log_message("🎉 Geocoding complete!")
 
                 st.markdown(
                     '<div class="success-box"><strong>✅ Geocoding Complete!</strong> All coordinates have been processed.</div>',
@@ -406,27 +512,43 @@ if uploaded_file is not None:
 
             st.markdown("#### Top States")
             state_counts = st.session_state.processed_df['State'].value_counts().head(10)
-            st.bar_chart(state_counts)
+            if len(state_counts) > 0:
+                st.bar_chart(state_counts)
 
             st.markdown("#### Top Cities")
             city_counts = st.session_state.processed_df['City'].value_counts().head(10)
-            st.bar_chart(city_counts)
+            if len(city_counts) > 0:
+                st.bar_chart(city_counts)
 
 else:
     st.info("👈 Please upload an Excel or CSV file to get started")
     st.markdown("""
     ### 📋 How to use:
     1. **Upload** your Excel or CSV file using the file uploader in the sidebar
-    2. **Configure** your API key in the sidebar (required for geocoding)
+    2. **Configure** your API key in the sidebar (or use MAP_API_KEY from environment)
     3. **Select** the columns containing latitude and longitude
     4. **Process** the data by clicking the "Start Geocoding" button
-    5. **Download** the results as Excel or CSV with extracted location details
+    5. **Monitor** real-time API activity in the log panel
+    6. **Download** the results as Excel or CSV with extracted location details
 
-    ### ✨ Features:
-    - ✅ Supports multiple sheets detection
-    - ✅ Automatic column detection for latitude/longitude
-    - ✅ Real-time progress tracking
-    - ✅ Extracts State, City, Town, and Postal Code
-    - ✅ Export results in multiple formats
-    - ✅ Built-in statistics and visualization
+    ### 🗺️ Supported APIs:
+    - **LocationIQ** - High accuracy, structured address data
+    - **Google Maps** - Comprehensive coverage, detailed components
+    - **OpenStreetMap (Nominatim)** - Free option, no API key needed
+
+    ### 📊 Output Columns:
+    - Latitude & Longitude (original coordinates)
+    - Street1 (house number + road)
+    - Street2 (quarter + suburb)
+    - City
+    - State
+    - Postal Code
+    - Country
+    - Full Address
+
+    ### ⚙️ Environment Setup:
+    Add to your `.env` file or Streamlit secrets:
+    ```
+    MAP_API_KEY=your_api_key_here
+    ```
     """)
