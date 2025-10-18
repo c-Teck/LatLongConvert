@@ -15,7 +15,7 @@ from utils import (
     get_coordinate_error_record,
     generate_unique_filename,
     validate_coordinate_values,
-    calculate_total_processing_time
+    calculate_total_processing_time,
 )
 
 # Page config
