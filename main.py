@@ -12,7 +12,10 @@ from utils import (
     prepare_output_dataframe,
     initialize_processed_data,
     get_error_record,
-    generate_unique_filename
+    get_coordinate_error_record,
+    generate_unique_filename,
+    validate_coordinate_values,
+    calculate_total_processing_time
 )
 
 # Page config
@@ -239,6 +242,17 @@ if uploaded_file is not None:
         # Clear logs
         st.session_state.logs = []
 
+        # Calculate total processing time and show countdown
+        rate_limit = st.session_state.api_client.RATE_LIMIT
+        total_seconds = calculate_total_processing_time(valid_coords, rate_limit)
+        
+        # Convert to minutes and seconds for display
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        time_display = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+        
+        st.info(f"⏱️ **Estimated Processing Time:** {time_display} ({valid_coords} coordinates × {rate_limit}s rate limit)")
+
         # Create two columns for processing
         log_col, progress_col = st.columns([1, 1])
 
@@ -250,6 +264,7 @@ if uploaded_file is not None:
             st.markdown("#### ⏳ Processing Progress")
             progress_bar = st.progress(0)
             status_text = st.empty()
+            countdown_placeholder = st.empty()
 
         # Initialize processed data
         processed_data = initialize_processed_data()
@@ -273,6 +288,7 @@ if uploaded_file is not None:
 
         processed_count = 0
         error_count = 0
+        skipped_count = 0
 
         for idx, (i, row) in enumerate(df.iterrows()):
             lat = row[lat_col]
@@ -280,8 +296,27 @@ if uploaded_file is not None:
 
             log_message(f"🔄 Row {idx + 1}/{len(df)}: Processing lat={lat}, lon={lon}")
 
-            if pd.notnull(lat) and pd.notnull(lon):
-                # Use API client to reverse geocode
+            # Validate coordinates BEFORE API call
+            is_valid, coord_status = validate_coordinate_values(lat, lon)
+            
+            if not is_valid:
+                # Skip invalid coordinates - no API call made
+                error_record = get_coordinate_error_record(coord_status)
+                processed_data['Latitude'].append(lat)
+                processed_data['Longitude'].append(lon)
+                processed_data['Street1'].append(error_record['Street1'])
+                processed_data['Street2'].append(error_record['Street2'])
+                processed_data['City'].append(error_record['City'])
+                processed_data['State'].append(error_record['State'])
+                processed_data['Postal Code'].append(error_record['Postal Code'])
+                processed_data['Country'].append(error_record['Country'])
+                processed_data['Full Address'].append(error_record['Full Address'])
+                processed_data['Status'].append(error_record['Status'])
+
+                log_message(f"⏭️ Row {idx + 1} skipped: {coord_status}")
+                skipped_count += 1
+            else:
+                # Valid coordinates - proceed with API call
                 result = st.session_state.api_client.reverse_geocode(lat, lon, log_message)
 
                 if result:
@@ -295,11 +330,12 @@ if uploaded_file is not None:
                     processed_data['Postal Code'].append(result.get('postal', ''))
                     processed_data['Country'].append(result.get('country', ''))
                     processed_data['Full Address'].append(result.get('address', ''))
+                    processed_data['Status'].append('Success')
 
                     log_message(f"✅ Row {idx + 1} processed successfully")
                     processed_count += 1
                 else:
-                    # Error - add error record
+                    # API Error - add error record
                     error_record = get_error_record()
                     processed_data['Latitude'].append(lat)
                     processed_data['Longitude'].append(lon)
@@ -310,6 +346,7 @@ if uploaded_file is not None:
                     processed_data['Postal Code'].append(error_record['Postal Code'])
                     processed_data['Country'].append(error_record['Country'])
                     processed_data['Full Address'].append(error_record['Full Address'])
+                    processed_data['Status'].append(error_record['Status'])
 
                     log_message(f"❌ Row {idx + 1} failed to process")
                     error_count += 1
@@ -317,12 +354,21 @@ if uploaded_file is not None:
                 # Rate limiting - use client's rate limit
                 time.sleep(st.session_state.api_client.RATE_LIMIT)
 
-            # Update progress
+            # Update progress with countdown timer
             progress = (idx + 1) / len(df)
             progress_bar.progress(progress)
+            
+            # Calculate remaining time
+            remaining_coords = len(df) - (idx + 1)
+            remaining_seconds = remaining_coords * rate_limit
+            remaining_minutes = remaining_seconds // 60
+            remaining_secs = remaining_seconds % 60
+            remaining_time = f"{remaining_minutes}m {remaining_secs}s" if remaining_minutes > 0 else f"{remaining_secs}s"
+            
             status_text.text(
-                f"Processing: {idx + 1}/{len(df)} rows ({progress * 100:.1f}%) | ✅ {processed_count} Success | ❌ {error_count} Errors"
+                f"Processing: {idx + 1}/{len(df)} rows ({progress * 100:.1f}%) | ✅ {processed_count} Success | ❌ {error_count} Errors | ⏭️ {skipped_count} Skipped"
             )
+            countdown_placeholder.text(f"⏱️ Remaining: {remaining_time}")
 
         # ====================================================================
         # PROCESSING COMPLETE
@@ -336,11 +382,11 @@ if uploaded_file is not None:
         status_text.empty()
 
         log_message(f"🎉 Geocoding complete!")
-        log_message(f"📊 Total Processed: {processed_count} | Errors: {error_count}")
+        log_message(f"📊 Total Processed: {processed_count} Success | {error_count} Errors | {skipped_count} Skipped")
 
         st.markdown(
             f'<div class="success-box"><strong>✅ Geocoding Complete!</strong> '
-            f'Processed {processed_count} records with {error_count} errors.</div>',
+            f'Processed {processed_count} records | {error_count} API errors | {skipped_count} skipped (invalid coordinates).</div>',
             unsafe_allow_html=True
         )
 

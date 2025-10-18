@@ -16,6 +16,25 @@ load_dotenv()
 # FILE NAMING & GENERATION
 # ============================================================================
 
+def calculate_total_processing_time(valid_coords_count: int, rate_limit: float) -> int:
+    """
+    Calculate total processing time in seconds.
+
+    Args:
+        valid_coords_count: Number of valid coordinates to process
+        rate_limit: Rate limit in seconds between requests
+
+    Returns:
+        Total time in seconds
+
+    Example:
+        >>> total_time = calculate_total_processing_time(50, 1.0)
+        >>> print(total_time)
+        50  # 50 requests * 1 second
+    """
+    return int(valid_coords_count * rate_limit)
+
+
 def generate_unique_filename() -> str:
     """
     Generate a unique filename for geocoded results.
@@ -258,29 +277,42 @@ def validate_coordinates(df: pd.DataFrame, lat_col: str, lon_col: str) -> int:
     return int(valid_count)
 
 
-def validate_coordinate_values(lat: float, lon: float) -> bool:
+def validate_coordinate_values(lat: float, lon: float) -> Tuple[bool, str]:
     """
-    Validate that coordinate values are within valid ranges.
+    Validate coordinate values and return status.
 
     Args:
         lat: Latitude value (-90 to 90)
         lon: Longitude value (-180 to 180)
 
     Returns:
-        True if coordinates are valid, False otherwise
+        Tuple of (is_valid: bool, status: str)
+        Status can be: "valid", "no_coordinates", "incomplete_coordinates", "invalid_range"
 
     Example:
-        >>> is_valid = validate_coordinate_values(6.5, 3.3)
-        >>> print(is_valid)
-        True
+        >>> is_valid, status = validate_coordinate_values(6.5, 3.3)
+        >>> print(status)
+        'valid'
     """
     try:
-        lat = float(lat)
-        lon = float(lon)
+        lat_float = float(lat) if pd.notnull(lat) else None
+        lon_float = float(lon) if pd.notnull(lon) else None
 
-        return -90 <= lat <= 90 and -180 <= lon <= 180
+        # Check if both are missing
+        if lat_float is None and lon_float is None:
+            return False, "no_coordinates"
+
+        # Check if only one is missing
+        if lat_float is None or lon_float is None:
+            return False, "incomplete_coordinates"
+
+        # Check if within valid ranges
+        if not (-90 <= lat_float <= 90 and -180 <= lon_float <= 180):
+            return False, "invalid_range"
+
+        return True, "valid"
     except (ValueError, TypeError):
-        return False
+        return False, "invalid_range"
 
 
 # ============================================================================
@@ -333,6 +365,41 @@ def get_error_record() -> Dict[str, str]:
         'Country': 'Not Available',
         'Full Address': 'Not Available',
         'Status': 'Error'
+    }
+
+
+def get_coordinate_error_record(error_type: str) -> Dict[str, str]:
+    """
+    Get error record for coordinate-related issues.
+
+    Args:
+        error_type: Type of error - "no_coordinates", "incomplete_coordinates", "invalid_range"
+
+    Returns:
+        Dictionary with appropriate error status
+
+    Example:
+        >>> error = get_coordinate_error_record("no_coordinates")
+        >>> print(error['Status'])
+        'No Coordinates Found'
+    """
+    error_messages = {
+        "no_coordinates": "No Coordinates Found",
+        "incomplete_coordinates": "Incomplete Coordinates",
+        "invalid_range": "Invalid Coordinate Range"
+    }
+
+    status = error_messages.get(error_type, "Unknown Error")
+
+    return {
+        'Street1': 'Not Available',
+        'Street2': 'Not Available',
+        'City': 'Not Available',
+        'State': 'Not Available',
+        'Postal Code': 'Not Available',
+        'Country': 'Not Available',
+        'Full Address': 'Not Available',
+        'Status': status
     }
 
 
