@@ -11,7 +11,8 @@ from utils import (
     validate_coordinates,
     prepare_output_dataframe,
     initialize_processed_data,
-    get_error_record
+    get_error_record,
+    generate_unique_filename
 )
 
 # Page config
@@ -207,7 +208,7 @@ if uploaded_file is not None:
     # Preview data
     st.markdown("### 📋 Data Preview")
     preview_rows = st.slider("Number of rows to preview", 1, min(len(df), 10), 5)
-    st.dataframe(df[[lat_col, lon_col]].head(preview_rows), use_container_width=True)
+    st.dataframe(df[[id_col, lat_col, lon_col]].head(preview_rows), use_container_width=True)
 
     # ========================================================================
     # PROCESSING SECTION
@@ -328,7 +329,7 @@ if uploaded_file is not None:
         # ====================================================================
 
         # Create result dataframe
-        result_df = prepare_output_dataframe(processed_data)
+        result_df = prepare_output_dataframe(st.session_state.df, processed_data, id_col, lat_col, lon_col)
         st.session_state.processed_df = result_df
 
         progress_bar.empty()
@@ -355,10 +356,27 @@ if uploaded_file is not None:
 
         with tab1:
             st.markdown("#### Complete Geocoded Data")
+            st.markdown(f"**Showing all {len(st.session_state.processed_df)} records with ID column: `{id_col}`**")
             st.dataframe(st.session_state.processed_df, use_container_width=True, height=400)
 
         with tab2:
             st.markdown("#### Export Results")
+
+            # Custom filename input (optional)
+            st.markdown("**📝 Custom Filename (Optional)**")
+            custom_filename = st.text_input(
+                "Enter custom filename",
+                value="",
+                placeholder="Leave empty to auto-generate filename",
+                help="If left empty, a unique filename will be auto-generated"
+            )
+
+            # Use custom filename or generate one
+            if custom_filename and custom_filename.strip():
+                base_filename = custom_filename.strip()
+            else:
+                base_filename = generate_unique_filename()
+
             col1, col2 = st.columns(2)
 
             with col1:
@@ -373,7 +391,7 @@ if uploaded_file is not None:
                 st.download_button(
                     label="📥 Download as Excel",
                     data=excel_buffer,
-                    file_name="geocoded_addresses.xlsx",
+                    file_name=f"{base_filename}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
@@ -383,21 +401,23 @@ if uploaded_file is not None:
                 st.download_button(
                     label="📥 Download as CSV",
                     data=csv_buffer,
-                    file_name="geocoded_addresses.csv",
+                    file_name=f"{base_filename}.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
+
+            st.info(f"📌 **Filename:** {base_filename}")
 
         with tab3:
             st.markdown("#### Data Statistics")
             col1, col2, col3, col4 = st.columns(4)
 
             total_records = len(st.session_state.processed_df)
-            valid_addresses = (st.session_state.processed_df['Full Address'] != 'Error').sum()
+            valid_addresses = (st.session_state.processed_df['Geocoding Status'] == 'Success').sum()
             error_records = total_records - valid_addresses
-            states_count = st.session_state.processed_df[st.session_state.processed_df['State'] != 'Error'][
+            states_count = st.session_state.processed_df[st.session_state.processed_df['State'] != 'Not Available'][
                 'State'].nunique()
-            cities_count = st.session_state.processed_df[st.session_state.processed_df['City'] != 'Error'][
+            cities_count = st.session_state.processed_df[st.session_state.processed_df['City'] != 'Not Available'][
                 'City'].nunique()
 
             with col1:
@@ -412,7 +432,7 @@ if uploaded_file is not None:
 
             st.markdown("#### Top States")
             state_counts = (
-                st.session_state.processed_df[st.session_state.processed_df['State'] != 'Error']
+                st.session_state.processed_df[st.session_state.processed_df['State'] != 'Not Available']
                 ['State']
                 .value_counts()
                 .head(10)
@@ -424,7 +444,7 @@ if uploaded_file is not None:
 
             st.markdown("#### Top Cities")
             city_counts = (
-                st.session_state.processed_df[st.session_state.processed_df['City'] != 'Error']
+                st.session_state.processed_df[st.session_state.processed_df['City'] != 'Not Available']
                 ['City']
                 .value_counts()
                 .head(10)

@@ -3,9 +3,39 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 from typing import Optional, Tuple, Dict, List
+from datetime import datetime
+import hashlib
+import random
+import string
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+# ============================================================================
+# FILE NAMING & GENERATION
+# ============================================================================
+
+def generate_unique_filename() -> str:
+    """
+    Generate a unique filename for geocoded results.
+
+    Format: geocoded_address_timestamp_random_hash
+
+    Returns:
+        Unique filename string (without extension)
+
+    Example:
+        >>> filename = generate_unique_filename()
+        >>> print(filename)
+        'geocoded_address_20250101_143022_a7f3b9c2'
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    filename = f"geocoded_address_{timestamp}_{random_suffix}"
+
+    return filename
 
 
 # ============================================================================
@@ -277,7 +307,8 @@ def initialize_processed_data() -> Dict[str, List]:
         'State': [],
         'Postal Code': [],
         'Country': [],
-        'Full Address': []
+        'Full Address': [],
+        'Status': []
     }
 
 
@@ -286,58 +317,89 @@ def get_error_record() -> Dict[str, str]:
     Get a record with error/placeholder values.
 
     Returns:
-        Dictionary with 'Error' values for all address fields
+        Dictionary with 'Not Available' values for all address fields
 
     Example:
         >>> error = get_error_record()
         >>> print(error['City'])
-        'Error'
+        'Not Available'
     """
     return {
-        'Street1': 'Error',
-        'Street2': 'Error',
-        'City': 'Error',
-        'State': 'Error',
-        'Postal Code': 'Error',
-        'Country': 'Error',
-        'Full Address': 'Error'
+        'Street1': 'Not Available',
+        'Street2': 'Not Available',
+        'City': 'Not Available',
+        'State': 'Not Available',
+        'Postal Code': 'Not Available',
+        'Country': 'Not Available',
+        'Full Address': 'Not Available',
+        'Status': 'Error'
     }
 
 
-def prepare_output_dataframe(processed_data: Dict[str, List]) -> pd.DataFrame:
+def prepare_output_dataframe(original_df: pd.DataFrame, processed_data: Dict[str, List],
+                             id_col: Optional[str] = None, lat_col: Optional[str] = None,
+                             lon_col: Optional[str] = None) -> pd.DataFrame:
     """
-    Create formatted output DataFrame from processed geocoding data.
+    Create formatted output DataFrame with ID | Latitude | Longitude | Geocoding Results.
+
+    Format: ID Column | Latitude | Longitude | Geocoding Results
 
     Args:
-        processed_data: Dictionary with lists of processed data
+        original_df: Original input DataFrame with all original data
+        processed_data: Dictionary with processed geocoding data
+        id_col: ID column name to put first in output
+        lat_col: Latitude column name from original data
+        lon_col: Longitude column name from original data
 
     Returns:
-        Formatted pandas DataFrame with proper column order and types
+        Formatted pandas DataFrame with only ID, Lat, Lon, and geocoding results
 
     Example:
+        >>> original_df = pd.DataFrame({'ID': ['001', '002'], 'Latitude': [6.5, 9.0], 'Longitude': [3.3, 7.4]})
         >>> data = initialize_processed_data()
-        >>> data['Latitude'].append(6.5)
-        >>> data['City'].append('Lagos')
-        >>> df = prepare_output_dataframe(data)
-        >>> print(df.head())
+        >>> df = prepare_output_dataframe(original_df, data, 'ID', 'Latitude', 'Longitude')
     """
-    df = pd.DataFrame({
-        'Latitude': processed_data['Latitude'],
-        'Longitude': processed_data['Longitude'],
+    # Create result dataframe with geocoding results
+    result_df = pd.DataFrame({
         'Street1': processed_data['Street1'],
         'Street2': processed_data['Street2'],
         'City': processed_data['City'],
         'State': processed_data['State'],
         'Postal Code': processed_data['Postal Code'],
         'Country': processed_data['Country'],
-        'Full Address': processed_data['Full Address']
+        'Full Address': processed_data['Full Address'],
+        'Geocoding Status': processed_data['Status']
     })
 
-    # Convert latitude/longitude to float, handling errors
-    df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
-    df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
+    # Reset index to ensure alignment
+    original_df = original_df.reset_index(drop=True)
+    result_df = result_df.reset_index(drop=True)
 
-    return df
+    # Build final dataframe with only ID, Lat, Lon columns + results
+    final_columns = []
+    final_data = {}
+
+    if id_col and id_col in original_df.columns:
+        final_data[id_col] = original_df[id_col].values
+
+    if lat_col and lat_col in original_df.columns:
+        final_data['Latitude'] = pd.to_numeric(original_df[lat_col], errors='coerce').values
+    else:
+        final_data['Latitude'] = processed_data['Latitude']
+
+    if lon_col and lon_col in original_df.columns:
+        final_data['Longitude'] = pd.to_numeric(original_df[lon_col], errors='coerce').values
+    else:
+        final_data['Longitude'] = processed_data['Longitude']
+
+    # Add geocoding results
+    for col in result_df.columns:
+        final_data[col] = result_df[col].values
+
+    # Create final dataframe
+    final_df = pd.DataFrame(final_data)
+
+    return final_df
 
 
 # ============================================================================
