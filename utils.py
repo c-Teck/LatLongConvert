@@ -168,6 +168,32 @@ def find_coordinate_columns(df: pd.DataFrame) -> Tuple[Optional[str], Optional[s
     return lat_col, lon_col
 
 
+def get_remaining_columns(df: pd.DataFrame, exclude_cols: List[str]) -> List[str]:
+    """
+    Get list of remaining columns excluding specified columns.
+
+    Args:
+        df: Input DataFrame
+        exclude_cols: Column names to exclude
+
+    Returns:
+        List of remaining column names
+
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'Latitude': [6.5],
+        ...     'Longitude': [3.3],
+        ...     'ID': ['001'],
+        ...     'Name': ['John']
+        ... })
+        >>> remaining = get_remaining_columns(df, ['Latitude', 'Longitude'])
+        >>> print(remaining)
+        ['ID', 'Name']
+    """
+    remaining = [col for col in df.columns if col not in exclude_cols]
+    return remaining
+
+
 # ============================================================================
 # DATA VALIDATION
 # ============================================================================

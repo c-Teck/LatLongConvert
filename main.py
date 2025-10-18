@@ -3,8 +3,8 @@ import pandas as pd
 import time
 from io import BytesIO
 
-from api_client import get_client
-from utils import (
+from apiclient import get_client
+from utils1 import (
     get_api_key_from_env,
     load_file,
     find_coordinate_columns,
@@ -111,7 +111,6 @@ if api_provider in ["LocationIQ", "Google Maps"]:
     if env_api_key:
         st.sidebar.success(f"✅ {api_provider} API key loaded from environment")
         api_key = env_api_key
-        # print("Location IQ key: ", api_key)
     else:
         api_key = st.sidebar.text_input(
             f"🔑 Enter your {api_provider} API Key",
@@ -178,7 +177,7 @@ if uploaded_file is not None:
 
     st.markdown("### 🎯 Column Selection")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         lat_col = st.selectbox(
             "Select Latitude Column",
@@ -193,6 +192,16 @@ if uploaded_file is not None:
             df.columns,
             index=list(df.columns).index(lon_col) if lon_col and lon_col in df.columns else 0,
             help="Choose the column containing longitude values"
+        )
+
+    with col3:
+        # Get remaining columns (excluding lat and lon)
+        remaining_cols = [col for col in df.columns if col not in [lat_col, lon_col]]
+
+        id_col = st.selectbox(
+            "Select Unique ID Column",
+            remaining_cols,
+            help="Choose a unique identifier column to track results (e.g., Row ID, Record ID)"
         )
 
     # Preview data
