@@ -19,7 +19,7 @@ class LocationIQClient(GeocodingAPIClient):
     """LocationIQ API Client for reverse geocoding"""
 
     BASE_URL = "https://us1.locationiq.com/v1/reverse.php"
-    RATE_LIMIT = 0.8  # seconds
+    RATE_LIMIT = 0.9  # seconds
 
     def reverse_geocode(self, lat: float, lon: float, log_callback: Callable) -> Optional[Dict]:
         """Reverse geocode using LocationIQ API"""
