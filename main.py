@@ -14,6 +14,7 @@ from utils import (
     initialize_processed_data,
     get_error_record,
     get_coordinate_error_record,
+    get_rate_limit_record,
     generate_unique_filename,
     validate_coordinate_values,
     calculate_total_processing_time,
@@ -261,16 +262,17 @@ with mode_tab2:
                         result = st.session_state.api_client.reverse_geocode(lat, lon, dummy_log)
                         
                         if result:
-                            full_address = result.get('address', 'Not Available')
-                            corrected_state = adjust_state_for_known_locations(
-                                full_address,
-                                result.get('state', 'Not Available')
+                            original_address = result.get('address', 'Not Available')
+                            original_state = result.get('state', 'Not Available')
+                            corrected_state, corrected_address = adjust_state_for_known_locations(
+                                original_address,
+                                original_state
                             )
                             results.append({
                                 'Pair': idx + 1,
                                 'Latitude': lat,
                                 'Longitude': lon,
-                                'Full Address': full_address,
+                                'Full Address': corrected_address,
                                 'State': corrected_state,
                                 'Status': 'Success'
                             })
@@ -427,9 +429,20 @@ with mode_tab1:
             # Clear logs
             st.session_state.logs = []
 
-            # Calculate total processing time and show countdown
+            # Calculate rate limits
             rate_limit = st.session_state.api_client.RATE_LIMIT
-            total_seconds = calculate_total_processing_time(valid_coords, rate_limit)
+            max_requests = 50 if api_provider == "OpenStreetMap (Nominatim)" else None
+
+            if max_requests and valid_coords > max_requests:
+                st.warning(
+                    f"⚠️ Nominatim free tier allows only {max_requests} lookups per hour. "
+                    f"Only the first {max_requests} valid records will be processed; the rest will be marked as rate-limit deferred."
+                )
+
+            effective_requests = min(valid_coords, max_requests) if max_requests else valid_coords
+
+            # Calculate total processing time and show countdown
+            total_seconds = calculate_total_processing_time(effective_requests, rate_limit)
             
             # Convert to minutes and seconds for display
             minutes = total_seconds // 60
@@ -474,6 +487,8 @@ with mode_tab1:
             processed_count = 0
             error_count = 0
             skipped_count = 0
+            rate_limited_count = 0
+            requests_made = 0
 
             for idx, (i, row) in enumerate(df.iterrows()):
                 lat = row[lat_col]
@@ -501,43 +516,68 @@ with mode_tab1:
                     log_message(f"⏭️ Row {idx + 1} skipped: {coord_status}")
                     skipped_count += 1
                 else:
-                    # Valid coordinates - proceed with API call
-                    result = st.session_state.api_client.reverse_geocode(lat, lon, log_message)
-
-                    if result:
-                        # Success - add result to processed data
+                    if max_requests and requests_made >= max_requests:
+                        rate_limit_record = get_rate_limit_record()
                         processed_data['Latitude'].append(lat)
                         processed_data['Longitude'].append(lon)
-                        processed_data['Street1'].append(result.get('street1', ''))
-                        processed_data['Street2'].append(result.get('street2', ''))
-                        processed_data['City'].append(result.get('city', ''))
-                        processed_data['State'].append(result.get('state', ''))
-                        processed_data['Postal Code'].append(result.get('postal', ''))
-                        processed_data['Country'].append(result.get('country', ''))
-                        processed_data['Full Address'].append(result.get('address', ''))
-                        processed_data['Status'].append('Success')
+                        processed_data['Street1'].append(rate_limit_record['Street1'])
+                        processed_data['Street2'].append(rate_limit_record['Street2'])
+                        processed_data['City'].append(rate_limit_record['City'])
+                        processed_data['State'].append(rate_limit_record['State'])
+                        processed_data['Postal Code'].append(rate_limit_record['Postal Code'])
+                        processed_data['Country'].append(rate_limit_record['Country'])
+                        processed_data['Full Address'].append(rate_limit_record['Full Address'])
+                        processed_data['Status'].append(rate_limit_record['Status'])
 
-                        log_message(f"✅ Row {idx + 1} processed successfully")
-                        processed_count += 1
+                        rate_limited_count += 1
+                        log_message(f"🚫 Row {idx + 1} deferred: hourly limit reached")
                     else:
-                        # API Error - add error record
-                        error_record = get_error_record()
-                        processed_data['Latitude'].append(lat)
-                        processed_data['Longitude'].append(lon)
-                        processed_data['Street1'].append(error_record['Street1'])
-                        processed_data['Street2'].append(error_record['Street2'])
-                        processed_data['City'].append(error_record['City'])
-                        processed_data['State'].append(error_record['State'])
-                        processed_data['Postal Code'].append(error_record['Postal Code'])
-                        processed_data['Country'].append(error_record['Country'])
-                        processed_data['Full Address'].append(error_record['Full Address'])
-                        processed_data['Status'].append(error_record['Status'])
+                        # Valid coordinates - proceed with API call
+                        result = st.session_state.api_client.reverse_geocode(lat, lon, log_message)
 
-                        log_message(f"❌ Row {idx + 1} failed to process")
-                        error_count += 1
+                        if result:
+                            # Success - add result to processed data
+                            original_address = result.get('address', '')
+                            original_state = result.get('state', '')
+                            corrected_state, corrected_address = adjust_state_for_known_locations(
+                                original_address,
+                                original_state
+                            )
 
-                    # Rate limiting - use client's rate limit
-                    time.sleep(st.session_state.api_client.RATE_LIMIT)
+                            processed_data['Latitude'].append(lat)
+                            processed_data['Longitude'].append(lon)
+                            processed_data['Street1'].append(result.get('street1', ''))
+                            processed_data['Street2'].append(result.get('street2', ''))
+                            processed_data['City'].append(result.get('city', ''))
+                            processed_data['State'].append(corrected_state)
+                            processed_data['Postal Code'].append(result.get('postal', ''))
+                            processed_data['Country'].append(result.get('country', ''))
+                            processed_data['Full Address'].append(corrected_address)
+                            processed_data['Status'].append('Success')
+
+                            log_message(f"✅ Row {idx + 1} processed successfully")
+                            processed_count += 1
+                        else:
+                            # API Error - add error record
+                            error_record = get_error_record()
+                            processed_data['Latitude'].append(lat)
+                            processed_data['Longitude'].append(lon)
+                            processed_data['Street1'].append(error_record['Street1'])
+                            processed_data['Street2'].append(error_record['Street2'])
+                            processed_data['City'].append(error_record['City'])
+                            processed_data['State'].append(error_record['State'])
+                            processed_data['Postal Code'].append(error_record['Postal Code'])
+                            processed_data['Country'].append(error_record['Country'])
+                            processed_data['Full Address'].append(error_record['Full Address'])
+                            processed_data['Status'].append(error_record['Status'])
+
+                            log_message(f"❌ Row {idx + 1} failed to process")
+                            error_count += 1
+
+                        requests_made += 1
+
+                        # Rate limiting - use client's rate limit
+                        time.sleep(st.session_state.api_client.RATE_LIMIT)
 
                 # Update progress with countdown timer
                 progress = (idx + 1) / len(df)
@@ -545,13 +585,16 @@ with mode_tab1:
                 
                 # Calculate remaining time
                 remaining_coords = len(df) - (idx + 1)
+                if max_requests:
+                    remaining_requests = max(max_requests - requests_made, 0)
+                    remaining_coords = min(remaining_coords, remaining_requests)
                 remaining_seconds = remaining_coords * rate_limit
                 remaining_minutes = remaining_seconds // 60
                 remaining_secs = remaining_seconds % 60
                 remaining_time = f"{remaining_minutes}m {remaining_secs}s" if remaining_minutes > 0 else f"{remaining_secs}s"
                 
                 status_text.text(
-                    f"Processing: {idx + 1}/{len(df)} rows ({progress * 100:.1f}%) | ✅ {processed_count} Success | ❌ {error_count} Errors | ⏭️ {skipped_count} Skipped"
+                    f"Processing: {idx + 1}/{len(df)} rows ({progress * 100:.1f}%) | ✅ {processed_count} Success | ❌ {error_count} Errors | ⏭️ {skipped_count} Skipped | 🚫 {rate_limited_count} Deferred"
                 )
                 countdown_placeholder.text(f"⏱️ Remaining: {remaining_time}")
 
@@ -567,11 +610,14 @@ with mode_tab1:
             status_text.empty()
 
             log_message(f"🎉 Geocoding complete!")
-            log_message(f"📊 Total Processed: {processed_count} Success | {error_count} Errors | {skipped_count} Skipped")
+            log_message(
+                f"📊 Totals — Success: {processed_count} | Errors: {error_count} | Skipped: {skipped_count} | Deferred: {rate_limited_count}"
+            )
 
             st.markdown(
                 f'<div class="success-box"><strong>✅ Geocoding Complete!</strong> '
-                f'Processed {processed_count} records | {error_count} API errors | {skipped_count} skipped (invalid coordinates).</div>',
+                f'Processed {processed_count} records | {error_count} API errors | {skipped_count} skipped (invalid coordinates) | '
+                f'{rate_limited_count} deferred due to hourly cap.</div>',
                 unsafe_allow_html=True
             )
 

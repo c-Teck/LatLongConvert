@@ -403,6 +403,25 @@ def get_coordinate_error_record(error_type: str) -> Dict[str, str]:
     }
 
 
+def get_rate_limit_record() -> Dict[str, str]:
+    """
+    Get a record representing a rate-limit deferment scenario.
+
+    Returns:
+        Dictionary with placeholder values and rate-limit status message.
+    """
+    return {
+        'Street1': 'Not Available',
+        'Street2': 'Not Available',
+        'City': 'Not Available',
+        'State': 'Not Available',
+        'Postal Code': 'Not Available',
+        'Country': 'Not Available',
+        'Full Address': 'Not Available',
+        'Status': 'Rate Limit Reached (50/hour cap)'
+    }
+
+
 def prepare_output_dataframe(original_df: pd.DataFrame, processed_data: Dict[str, List],
                              id_col: Optional[str] = None, lat_col: Optional[str] = None,
                              lon_col: Optional[str] = None) -> pd.DataFrame:
@@ -596,31 +615,106 @@ def clean_address_field(value: str) -> str:
     return value.strip()
 
 
-def adjust_state_for_known_locations(full_address: str, state: str) -> str:
+def adjust_state_for_known_locations(full_address: str, state: str) -> tuple[str, str]:
     """
     Apply manual corrections for known geocoding inaccuracies.
+    Corrects both state and full address when a known mismatch is detected.
 
     Args:
         full_address: The full address returned by the API
         state: The state value returned by the API
 
     Returns:
-        Corrected state value when a known mismatch is detected; otherwise the original state.
+        Tuple of (corrected_state, corrected_full_address)
+        Returns original values if no correction needed.
     """
     if not isinstance(full_address, str) or not isinstance(state, str):
-        return state
+        return state, full_address
 
     address_lower = full_address.lower()
     state_lower = state.lower()
 
+    # Check for Lagos-Calabar Coastal Highway / Dangote Refinery with incorrect Delta State
     if (
         "lagos-calabar coastal highway" in address_lower
         and "dangote refinery" in address_lower
         and state_lower == "delta state"
     ):
-        return "Lagos State"
+        corrected_state = "Lagos State"
+        # Clean up the full address: remove intermediate location details and replace Delta State with Lagos State
+        # Original: "Lagos-Calabar Coastal Highway, Dangote Refinery, Ohoro, Ughelli North, Delta State, 333105, Nigeria"
+        # Target: "Lagos-Calabar Coastal Highway, Dangote Refinery, Lagos State, Nigeria"
+        
+        # Split address by comma and process each part
+        parts = [part.strip() for part in full_address.split(',')]
+        filtered_parts = []
+        
+        # Known problematic intermediate locations to remove
+        unwanted_locations = ["ohoro", "ughelli north", "ughelli"]
+        
+        for part in parts:
+            part_lower = part.lower()
+            
+            # Skip unwanted intermediate locations
+            if part_lower in unwanted_locations:
+                continue
+            
+            # Replace Delta State with Lagos State
+            if part_lower == "delta state":
+                filtered_parts.append("Lagos State")
+                continue
+            
+            # Skip postal codes (numeric only parts) to match desired output format
+            if part.strip().isdigit():
+                continue
+            
+            # Keep essential parts: Highway, Refinery, State, Country
+            if (
+                "lagos-calabar coastal highway" in part_lower
+                or "dangote refinery" in part_lower
+                or "lagos state" in part_lower
+                or "nigeria" in part_lower
+            ):
+                filtered_parts.append(part.strip())
+            # Skip other intermediate location parts that aren't essential
+            elif not any(keyword in part_lower for keyword in ["highway", "refinery", "state", "nigeria"]):
+                # Skip non-essential intermediate locations
+                continue
+            else:
+                filtered_parts.append(part.strip())
+        
+        # Ensure we have the essential components in order
+        # Build final address: Highway, Refinery, State, Country
+        final_parts = []
+        highway_found = False
+        refinery_found = False
+        state_found = False
+        country_found = False
+        
+        for part in filtered_parts:
+            part_lower = part.lower()
+            if "lagos-calabar coastal highway" in part_lower and not highway_found:
+                final_parts.append(part)
+                highway_found = True
+            elif "dangote refinery" in part_lower and not refinery_found:
+                final_parts.append(part)
+                refinery_found = True
+            elif "lagos state" in part_lower and not state_found:
+                final_parts.append(part)
+                state_found = True
+            elif "nigeria" in part_lower and not country_found:
+                final_parts.append(part)
+                country_found = True
+        
+        # If we didn't find all parts in filtered_parts, use filtered_parts as-is
+        if len(final_parts) < 3:
+            final_parts = filtered_parts
+        
+        corrected_address = ", ".join(final_parts) if final_parts else full_address
+        
+        return corrected_state, corrected_address
 
-    return state
+    return state, full_address
 
 
 def deduplicate_results(df: pd.DataFrame, subset: List[str] = None) -> pd.DataFrame:
