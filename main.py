@@ -17,6 +17,7 @@ from utils import (
     generate_unique_filename,
     validate_coordinate_values,
     calculate_total_processing_time,
+    adjust_state_for_known_locations,
 )
 
 # Page config
@@ -101,32 +102,47 @@ if "api_provider" not in st.session_state:
 
 st.sidebar.header("⚙️ Configuration")
 
-api_provider = st.sidebar.radio(
-    "🗺️ Select Geocoding Provider",
-    options=["LocationIQ", "Google Maps", "OpenStreetMap (Nominatim)"],
-    help="Choose your geocoding service provider"
-)
+# Determine available API key (env or manual input)
+env_api_key = get_api_key_from_env("default").strip()
+manual_api_key = st.sidebar.text_input(
+    "🔑 Optional: Enter API key for LocationIQ or Google Maps",
+    type="password",
+    help="Provide your premium API key to unlock LocationIQ or Google Maps providers",
+    key="manual_api_key_input"
+).strip()
+
+available_api_key = manual_api_key or env_api_key
+has_api_key = bool(available_api_key)
+
+if has_api_key:
+    provider_options = ["LocationIQ", "Google Maps", "OpenStreetMap (Nominatim)"]
+    default_provider = st.session_state.get("api_provider", provider_options[0])
+    if default_provider not in provider_options:
+        default_provider = provider_options[0]
+
+    api_provider = st.sidebar.radio(
+        "🗺️ Select Geocoding Provider",
+        options=provider_options,
+        index=provider_options.index(default_provider),
+        help="Choose your geocoding service provider"
+    )
+
+    if manual_api_key:
+        st.sidebar.success("✅ Using manually provided API key")
+    else:
+        st.sidebar.success("✅ API key loaded from environment")
+else:
+    api_provider = "OpenStreetMap (Nominatim)"
+    st.sidebar.info("ℹ️ No API key detected. Using OpenStreetMap (Nominatim) by default.")
+    st.sidebar.warning("⚠️ Free OpenStreetMap usage is limited to approximately 50 calls per hour.")
+
+# Select appropriate API key for chosen provider
+if api_provider == "OpenStreetMap (Nominatim)":
+    api_key = None
+else:
+    api_key = available_api_key if has_api_key else None
 
 st.session_state.api_provider = api_provider
-
-# Get API key from environment
-env_api_key = get_api_key_from_env(api_provider)
-
-if api_provider in ["LocationIQ", "Google Maps"]:
-    if env_api_key:
-        st.sidebar.success(f"✅ {api_provider} API key loaded from environment")
-        api_key = env_api_key
-    else:
-        api_key = st.sidebar.text_input(
-            f"🔑 Enter your {api_provider} API Key",
-            type="password",
-            help=f"Your {api_provider} API key for reverse geocoding"
-        )
-        if not api_key:
-            st.sidebar.warning(f"⚠️ No API key found. Please provide one or add MAP_API_KEY to environment")
-else:
-    api_key = None
-    st.sidebar.info("ℹ️ OpenStreetMap is free and doesn't require an API key")
 
 # Initialize API client
 try:
@@ -245,12 +261,17 @@ with mode_tab2:
                         result = st.session_state.api_client.reverse_geocode(lat, lon, dummy_log)
                         
                         if result:
+                            full_address = result.get('address', 'Not Available')
+                            corrected_state = adjust_state_for_known_locations(
+                                full_address,
+                                result.get('state', 'Not Available')
+                            )
                             results.append({
                                 'Pair': idx + 1,
                                 'Latitude': lat,
                                 'Longitude': lon,
-                                'Full Address': result.get('address', 'Not Available'),
-                                'State': result.get('state', 'Not Available'),
+                                'Full Address': full_address,
+                                'State': corrected_state,
                                 'Status': 'Success'
                             })
                         else:
@@ -361,16 +382,21 @@ with mode_tab1:
             # Get remaining columns (excluding lat and lon)
             remaining_cols = [col for col in df.columns if col not in [lat_col, lon_col]]
 
-            id_col = st.selectbox(
-                "Select Unique ID Column",
-                remaining_cols,
-                help="Choose a unique identifier column to track results (e.g., Row ID, Record ID)"
-            )
+            if remaining_cols:
+                id_col = st.selectbox(
+                    "Select Unique ID Column",
+                    remaining_cols,
+                    help="Choose a unique identifier column to track results (e.g., Row ID, Record ID)"
+                )
+            else:
+                st.info("ℹ️ Only latitude and longitude columns detected. Results will omit an ID column.")
+                id_col = None
 
         # Preview data
         st.markdown("### 📋 Data Preview")
         preview_rows = st.slider("Number of rows to preview", 1, min(len(df), 10), 5)
-        st.dataframe(df[[id_col, lat_col, lon_col]].head(preview_rows), use_container_width=True)
+        preview_columns = [col for col in [id_col, lat_col, lon_col] if col]
+        st.dataframe(df[preview_columns].head(preview_rows), use_container_width=True)
 
         # ========================================================================
         # PROCESSING SECTION
@@ -561,7 +587,12 @@ with mode_tab1:
 
             with tab1:
                 st.markdown("#### Complete Geocoded Data")
-                st.markdown(f"**Showing all {len(st.session_state.processed_df)} records with ID column: `{id_col}`**")
+                if id_col:
+                    st.markdown(f"**Showing all {len(st.session_state.processed_df)} records with ID column: `{id_col}`**")
+                else:
+                    st.markdown(
+                        f"**Showing all {len(st.session_state.processed_df)} records using columns `{lat_col}` and `{lon_col}` as identifiers**"
+                    )
                 st.dataframe(st.session_state.processed_df, use_container_width=True, height=400)
 
             with tab2:

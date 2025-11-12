@@ -596,6 +596,33 @@ def clean_address_field(value: str) -> str:
     return value.strip()
 
 
+def adjust_state_for_known_locations(full_address: str, state: str) -> str:
+    """
+    Apply manual corrections for known geocoding inaccuracies.
+
+    Args:
+        full_address: The full address returned by the API
+        state: The state value returned by the API
+
+    Returns:
+        Corrected state value when a known mismatch is detected; otherwise the original state.
+    """
+    if not isinstance(full_address, str) or not isinstance(state, str):
+        return state
+
+    address_lower = full_address.lower()
+    state_lower = state.lower()
+
+    if (
+        "lagos-calabar coastal highway" in address_lower
+        and "dangote refinery" in address_lower
+        and state_lower == "delta state"
+    ):
+        return "Lagos State"
+
+    return state
+
+
 def deduplicate_results(df: pd.DataFrame, subset: List[str] = None) -> pd.DataFrame:
     """
     Remove duplicate records from results.
