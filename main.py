@@ -103,35 +103,66 @@ if "api_provider" not in st.session_state:
 
 st.sidebar.header("⚙️ Configuration")
 
-# Determine available API key (env or manual input)
-env_api_key = get_api_key_from_env("default").strip()
-manual_api_key = st.sidebar.text_input(
-    "🔑 Optional: Enter API key for LocationIQ or Google Maps",
+# Get API keys from environment for each provider
+env_locationiq_key = get_api_key_from_env("LocationIQ").strip()
+env_googlemaps_key = get_api_key_from_env("Google Maps").strip()
+
+# Manual API key inputs
+st.sidebar.markdown("### 🔑 API Keys")
+
+manual_locationiq_key = st.sidebar.text_input(
+    "📍 LocationIQ API Key (Optional)",
     type="password",
-    help="Provide your premium API key to unlock LocationIQ or Google Maps providers",
-    key="manual_api_key_input"
+    help="Enter your LocationIQ API key, or set LOCATIONIQ_API_KEY in environment",
+    key="manual_locationiq_key_input"
 ).strip()
 
-available_api_key = manual_api_key or env_api_key
-has_api_key = bool(available_api_key)
+manual_googlemaps_key = st.sidebar.text_input(
+    "🗺️ Google Maps API Key (Optional)",
+    type="password",
+    help="Enter your Google Maps API key, or set GOOGLE_MAPS_API_KEY in environment",
+    key="manual_googlemaps_key_input"
+).strip()
 
-if has_api_key:
-    provider_options = ["LocationIQ", "Google Maps", "OpenStreetMap (Nominatim)"]
+# Determine available API keys (manual input takes precedence over env)
+available_locationiq_key = manual_locationiq_key or env_locationiq_key
+available_googlemaps_key = manual_googlemaps_key or env_googlemaps_key
+
+has_locationiq_key = bool(available_locationiq_key)
+has_googlemaps_key = bool(available_googlemaps_key)
+has_any_key = has_locationiq_key or has_googlemaps_key
+
+# Show status for loaded keys
+if env_locationiq_key and not manual_locationiq_key:
+    st.sidebar.success("✅ LocationIQ key loaded from environment")
+if env_googlemaps_key and not manual_googlemaps_key:
+    st.sidebar.success("✅ Google Maps key loaded from environment")
+if manual_locationiq_key:
+    st.sidebar.info("ℹ️ Using manually provided LocationIQ key")
+if manual_googlemaps_key:
+    st.sidebar.info("ℹ️ Using manually provided Google Maps key")
+
+# Provider selection
+st.sidebar.markdown("### 🗺️ Geocoding Provider")
+
+if has_any_key:
+    provider_options = []
+    if has_locationiq_key:
+        provider_options.append("LocationIQ")
+    if has_googlemaps_key:
+        provider_options.append("Google Maps")
+    provider_options.append("OpenStreetMap (Nominatim)")
+    
     default_provider = st.session_state.get("api_provider", provider_options[0])
     if default_provider not in provider_options:
         default_provider = provider_options[0]
 
     api_provider = st.sidebar.radio(
-        "🗺️ Select Geocoding Provider",
+        "Select Geocoding Provider",
         options=provider_options,
         index=provider_options.index(default_provider),
         help="Choose your geocoding service provider"
     )
-
-    if manual_api_key:
-        st.sidebar.success("✅ Using manually provided API key")
-    else:
-        st.sidebar.success("✅ API key loaded from environment")
 else:
     api_provider = "OpenStreetMap (Nominatim)"
     st.sidebar.info("ℹ️ No API key detected. Using OpenStreetMap (Nominatim) by default.")
@@ -140,8 +171,12 @@ else:
 # Select appropriate API key for chosen provider
 if api_provider == "OpenStreetMap (Nominatim)":
     api_key = None
+elif api_provider == "LocationIQ":
+    api_key = available_locationiq_key if has_locationiq_key else None
+elif api_provider == "Google Maps":
+    api_key = available_googlemaps_key if has_googlemaps_key else None
 else:
-    api_key = available_api_key if has_api_key else None
+    api_key = None
 
 st.session_state.api_provider = api_provider
 
@@ -228,8 +263,10 @@ with mode_tab2:
         # Process button
         if st.button("🚀 Get Addresses", type="primary", use_container_width=True):
             # Validate API client
-            if api_provider in ["LocationIQ", "Google Maps"] and not api_key:
-                st.error(f"❌ Please enter your {api_provider} API key in the sidebar")
+            if api_provider == "LocationIQ" and not api_key:
+                st.error("❌ Please enter your LocationIQ API key in the sidebar (or set LOCATIONIQ_API_KEY in environment)")
+            elif api_provider == "Google Maps" and not api_key:
+                st.error("❌ Please enter your Google Maps API key in the sidebar (or set GOOGLE_MAPS_API_KEY in environment)")
             else:
                 # Initialize results storage
                 results = []
@@ -409,8 +446,11 @@ with mode_tab1:
 
         if st.button("🚀 Start Geocoding", type="primary", use_container_width=True):
             # Validate before processing
-            if api_provider in ["LocationIQ", "Google Maps"] and not api_key:
-                st.error(f"❌ Please enter your {api_provider} API key in the sidebar")
+            if api_provider == "LocationIQ" and not api_key:
+                st.error("❌ Please enter your LocationIQ API key in the sidebar (or set LOCATIONIQ_API_KEY in environment)")
+                st.stop()
+            elif api_provider == "Google Maps" and not api_key:
+                st.error("❌ Please enter your Google Maps API key in the sidebar (or set GOOGLE_MAPS_API_KEY in environment)")
                 st.stop()
 
             if not st.session_state.api_client:
@@ -765,11 +805,15 @@ with mode_tab1:
         ### ⚙️ Environment Setup:
         Create a `.env` file in your project root:
         ```
-        MAP_API_KEY=your_api_key_here
+        LOCATIONIQ_API_KEY=your_locationiq_api_key_here
+        GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
         ```
 
         Or add to Streamlit Cloud secrets:
         ```
-        MAP_API_KEY = "your_api_key_here"
+        LOCATIONIQ_API_KEY = "your_locationiq_api_key_here"
+        GOOGLE_MAPS_API_KEY = "your_google_maps_api_key_here"
         ```
+
+        **Note:** For backward compatibility, `MAP_API_KEY` will still work for LocationIQ if `LOCATIONIQ_API_KEY` is not set.
         """)

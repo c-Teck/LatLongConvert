@@ -63,14 +63,16 @@ def generate_unique_filename() -> str:
 
 def get_api_key_from_env(provider: str) -> Optional[str]:
     """
-    Get API key from Streamlit secrets or .env file.
+    Get API key from Streamlit secrets or .env file for a specific provider.
 
     Priority:
-    1. st.secrets (Streamlit Cloud production)
-    2. os.getenv (local .env development)
+    1. Provider-specific key (LOCATIONIQ_API_KEY, GOOGLE_MAPS_API_KEY)
+    2. Generic MAP_API_KEY (backward compatibility, used for LocationIQ)
+    3. st.secrets (Streamlit Cloud production)
+    4. os.getenv (local .env development)
 
     Args:
-        provider: The API provider name (not used but kept for future extensibility)
+        provider: The API provider name ("LocationIQ", "Google Maps", etc.)
 
     Returns:
         API key string if found, empty string otherwise
@@ -80,17 +82,46 @@ def get_api_key_from_env(provider: str) -> Optional[str]:
         >>> print(api_key)
         'your_api_key_here'
     """
+    provider_upper = provider.upper().replace(" ", "_")
+    
+    # Map provider names to environment variable names
+    env_key_map = {
+        "LOCATIONIQ": "LOCATIONIQ_API_KEY",
+        "GOOGLE_MAPS": "GOOGLE_MAPS_API_KEY",
+        "GOOGLEMAPS": "GOOGLE_MAPS_API_KEY"
+    }
+    
+    env_key_name = env_key_map.get(provider_upper, f"{provider_upper}_API_KEY")
+    
     try:
         # Try Streamlit secrets first (production - Streamlit Cloud)
         if hasattr(st, 'secrets'):
-            secret_key = st.secrets.get("MAP_API_KEY", "")
+            # Try provider-specific key first
+            secret_key = st.secrets.get(env_key_name, "")
             if secret_key:
                 return secret_key
+            
+            # Fallback to generic MAP_API_KEY for LocationIQ (backward compatibility)
+            if provider_upper in ["LOCATIONIQ", "LOCATION_IQ"]:
+                secret_key = st.secrets.get("MAP_API_KEY", "")
+                if secret_key:
+                    return secret_key
     except FileNotFoundError:
         pass
 
     # Fall back to dotenv (development - local .env)
-    return os.getenv("MAP_API_KEY", "")
+    # Try provider-specific key first
+    api_key = os.getenv(env_key_name, "")
+    if api_key:
+        return api_key
+    
+    # Fallback to generic MAP_API_KEY for LocationIQ (backward compatibility)
+    if provider_upper in ["LOCATIONIQ", "LOCATION_IQ"]:
+        api_key = os.getenv("MAP_API_KEY", "")
+        if api_key:
+            return api_key
+    
+    return ""
 
 
 # ============================================================================
