@@ -92,14 +92,60 @@ class GoogleMapsClient(GeocodingAPIClient):
 
                 if data.get('results'):
                     log_callback(f"✅ Data received successfully")
-                    result = data['results'][0]
-                    address = result.get('formatted_address', '')
-                    address_components = result.get('address_components', [])
+                    
+                    # Filter out plus code results and prefer proper addresses
+                    results = data['results']
+                    preferred_result = None
+                    
+                    # Priority order for result types (prefer detailed addresses over plus codes)
+                    preferred_types = [
+                        'street_address',
+                        'premise',
+                        'subpremise',
+                        'route',
+                        'intersection',
+                        'political',
+                        'locality',
+                        'administrative_area_level_1',
+                        'administrative_area_level_2',
+                        'administrative_area_level_3',
+                        'administrative_area_level_4',
+                        'administrative_area_level_5'
+                    ]
+                    
+                    # First, try to find a result that's NOT a plus code and has preferred types
+                    for result in results:
+                        result_types = result.get('types', [])
+                        # Skip plus codes
+                        if 'plus_code' in result_types:
+                            continue
+                        # Prefer results with street addresses or routes
+                        if any(pref_type in result_types for pref_type in preferred_types):
+                            preferred_result = result
+                            break
+                    
+                    # If no preferred result found, use first non-plus-code result
+                    if not preferred_result:
+                        for result in results:
+                            result_types = result.get('types', [])
+                            if 'plus_code' not in result_types:
+                                preferred_result = result
+                                break
+                    
+                    # Fallback to first result if all are plus codes (shouldn't happen, but just in case)
+                    if not preferred_result:
+                        preferred_result = results[0]
+                        log_callback(f"⚠️ Only plus code available, using it as fallback")
+                    
+                    address = preferred_result.get('formatted_address', '')
+                    address_components = preferred_result.get('address_components', [])
 
                     state = ''
                     city = ''
                     postal = ''
                     country = ''
+                    street_number = ''
+                    route = ''
 
                     for component in address_components:
                         types = component.get('types', [])
@@ -113,9 +159,19 @@ class GoogleMapsClient(GeocodingAPIClient):
                             postal = long_name
                         elif 'country' in types:
                             country = long_name
+                        elif 'street_number' in types:
+                            street_number = long_name
+                        elif 'route' in types:
+                            route = long_name
+
+                    # Build street1 from street number and route
+                    street1 = f"{street_number} {route}".strip()
+                    if not street1 and address:
+                        # Fallback to first part of formatted address
+                        street1 = address.split(',')[0] if address else ''
 
                     return {
-                        'street1': address.split(',')[0] if address else '',
+                        'street1': street1,
                         'street2': '',
                         'city': city,
                         'state': state,
